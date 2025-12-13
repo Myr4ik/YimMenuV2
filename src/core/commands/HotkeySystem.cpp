@@ -1,12 +1,9 @@
 #include "HotkeySystem.hpp"
-#include "core/backend/FiberPool.hpp" // Вернули для корректного выполнения команд
+#include "core/backend/FiberPool.hpp"
 #include "core/backend/ScriptMgr.hpp"
 #include "Commands.hpp"
 #include "LoopedCommand.hpp"
 #include "core/util/Joaat.hpp"
-
-// TODO: serialization isn't stable
-
 #include "game/pointers/Pointers.hpp" // game import in core!
 #include "game/gta/Natives.hpp"       // game import in core!
 #include "game/frontend/GUI.hpp"
@@ -28,7 +25,7 @@ namespace YimMenu
 			m_CommandHotkeys.insert(std::make_pair(hash, link));
 		}
 		
-		// Жесткая привязка чата убрана по просьбе.
+		// Жесткая привязка чата убрана.
 	}
 
 	bool HotkeySystem::ListenAndApply(int& Hotkey, std::vector<int> Blacklist)
@@ -65,28 +62,9 @@ namespace YimMenu
 		return KeyName;
 	}
 
-	// Функция проверки, используется ли уже такая цепочка клавиш другой командой
-	bool HotkeySystem::IsChainUsed(const std::vector<int>& chain)
-	{
-		if (chain.empty()) return false;
-
-		for (auto& [hash, link] : m_CommandHotkeys)
-		{
-			// Сравниваем цепочки. Если они идентичны по длине и содержанию -> конфликт
-			if (link.m_Chain.size() == chain.size())
-			{
-				if (std::equal(link.m_Chain.begin(), link.m_Chain.end(), chain.begin()))
-				{
-					// Здесь можно получить имя команды через Commands::GetCommand(hash)->GetName() для лога
-					return true; 
-				}
-			}
-		}
-		return false;
-	}
-
 	void HotkeySystem::CreateHotkey(std::vector<int>& chain)
 	{
+		// Локальная проверка уникальности клавиши в текущей цепочке
 		static auto is_key_unique_in_chain = [](int Key, std::vector<int> List) -> bool {
 			for (auto& _key : List)
 				if (_key == Key)
@@ -94,19 +72,31 @@ namespace YimMenu
 			return true;
 		};
 
+		// Локальная проверка занятости всей комбинации (вместо отдельного метода класса)
+		auto is_chain_used_globally = [this](const std::vector<int>& check_chain) -> bool {
+			if (check_chain.empty()) return false;
+			for (auto& [hash, link] : m_CommandHotkeys)
+			{
+				if (link.m_Chain.size() == check_chain.size())
+				{
+					if (std::equal(link.m_Chain.begin(), link.m_Chain.end(), check_chain.begin()))
+						return true;
+				}
+			}
+			return false;
+		};
+
 		int pressed_key = 0;
 		if (ListenAndApply(pressed_key, chain))
 		{
-			// Сначала проверяем, нет ли дубликата самой клавиши в текущей цепочке (например F1 + F1)
 			if (is_key_unique_in_chain(pressed_key, chain))
 			{
-				// Создаем временную копию цепочки, какой она станет после добавления
+				// Создаем временную копию цепочки для проверки
 				std::vector<int> potential_chain = chain;
 				potential_chain.push_back(pressed_key);
 
-				// ПРОВЕРКА КОНФЛИКТОВ
-				// Блокируем создание дубликата и пишем варнинг.
-				if (IsChainUsed(potential_chain))
+				// Если комбинация уже занята — выводим предупреждение в лог и не сохраняем
+				if (is_chain_used_globally(potential_chain))
 				{
 					LOG(WARNING) << "Hotkey conflict detected! Key combination is already in use.";
 					return; 
@@ -146,8 +136,6 @@ namespace YimMenu
 						if (command)
 						{
 							// FIX: Запускаем ВСЕ команды через FiberPool.
-							// Это чинит ChatHelper (ему нужен скриптовый поток) и предотвращает 
-							// подвисание системы ввода, если команда выполняется долго.
 							FiberPool::Push([command] {
 								command->Call();
 							});
