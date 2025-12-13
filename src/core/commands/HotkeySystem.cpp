@@ -142,6 +142,9 @@ namespace YimMenu
 
 	void HotkeySystem::SaveStateImpl(nlohmann::json& state)
 	{
+		// FIX: Очищаем старое состояние, чтобы удаленные хоткеи исчезали из файла
+		state.clear();
+
 		for (auto& hotkey : m_CommandHotkeys)
 		{
 			if (!hotkey.second.m_Chain.empty())
@@ -155,8 +158,11 @@ namespace YimMenu
 	{
 		for (auto& [key, value] : state.items())
 		{
-			if (m_CommandHotkeys.contains(std::atoi(key.data())))
-				m_CommandHotkeys[std::atoi(key.data())].m_Chain = value.get<std::vector<int>>();
+			// FIX: Используем strtoul вместо atoi, так как хэши команд могут превышать предел int
+			auto hash = std::strtoul(key.data(), nullptr, 10);
+			
+			if (m_CommandHotkeys.contains(hash))
+				m_CommandHotkeys[hash].m_Chain = value.get<std::vector<int>>();
 		}
 	}
 
