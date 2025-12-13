@@ -1,12 +1,8 @@
 #include "HotkeySystem.hpp"
-#include "core/backend/FiberPool.hpp"
 #include "core/backend/ScriptMgr.hpp"
 #include "Commands.hpp"
 #include "LoopedCommand.hpp"
 #include "core/util/Joaat.hpp"
-
-// TODO: serialization isn't stable
-
 #include "game/pointers/Pointers.hpp" // game import in core!
 #include "game/gta/Natives.hpp"       // game import in core!
 #include "game/frontend/GUI.hpp"
@@ -27,9 +23,6 @@ namespace YimMenu
 			CommandLink link;
 			m_CommandHotkeys.insert(std::make_pair(hash, link));
 		}
-
-		m_CommandHotkeys.at("chathelper"_J).m_Chain.clear(); // ensure chat is always bound
-		m_CommandHotkeys.at("chathelper"_J).m_Chain.push_back(0x54);
 	}
 
 	bool HotkeySystem::ListenAndApply(int& Hotkey, std::vector<int> Blacklist)
@@ -117,15 +110,8 @@ namespace YimMenu
 						auto command = Commands::GetCommand(hash);
 						if (command)
 						{
-							// TODO: this is the only way I can prevent chat from blocking the main loop while keeping everything else fast
-							if (hash != "chathelper"_J)
-								command->Call();
-							else
-							{
-								FiberPool::Push([command] {
-									command->Call();
-								});
-							}
+							// Теперь вызов универсален для всех команд
+							command->Call();
 						}
 						m_LastHotkeyTriggerTime = std::chrono::system_clock::now();
 					}
