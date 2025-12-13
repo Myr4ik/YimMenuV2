@@ -1,34 +1,13 @@
 #pragma once
 #include "core/util/Joaat.hpp"
+
 #include <array>
 
 namespace YimMenu
 {
-	static constexpr auto g_VehicleClassNames = std::to_array({"Compact",
-	    "Sedan",
-	    "SUV",
-	    "Coupe",
-	    "Muscle",
-	    "Sport Classic",
-	    "Sport",
-	    "Super",
-	    "Motorcycle",
-	    "Off-road",
-	    "Industrial",
-	    "Utility",
-	    "Van",
-	    "Cycle",
-	    "Boat",
-	    "Helicopter",
-	    "Plane",
-	    "Service",
-	    "Emergency",
-	    "Military",
-	    "Commercial",
-	    "Rail",
-	    "Open Wheel"});
+	static constexpr auto g_VehicleClassNames = std::to_array({"Compact", "Sedan", "SUV", "Coupe", "Muscle", "Sport Classic", "Sport", "Super", "Motorcycle", "Off-road", "Industrial", "Utility", "Van", "Cycle", "Boat", "Helicopter", "Plane", "Service", "Emergency", "Military", "Commercial", "Rail", "Open Wheel"});
 
-		static constexpr auto g_VehicleHashes = std::to_array({
+	static constexpr auto g_VehicleHashes = std::to_array({
 	    "adder"_J,
 	    "airbus"_J,
 	    "airtug"_J,
@@ -935,19 +914,21 @@ namespace YimMenu
 	    "suzume"_J,
 	    "tampa4"_J,
 	    "woodlander"_J,
-	    "astrale"_J,
-	    "driftdominator9"_J,
-	    "driftkeiora"_J,
-	    "drift3000"_J,
-	    "driftsentinel2"_J,
 	    "fmj2"_J,
-	    "gtr750"_J,
-	    "keiora"_J,
-	    "luva"_J,
-	    "polbuffalo6"_J,
-	    "sentinel6h"_J,
-	    "vivante2"_J,
+	    "sentinel6"_J,
 	    "xtreme"_J,
+	    "luiva"_J,
+	    "astrale"_J,
+	    "itali2"_J,
+	    "gt750"_J,
+	    "vivanite2"_J,
+	    "driftrt3000"_J,
+	    "keitora"_J,
+	    "driftdominator9"_J,
+	    "driftsentinel2"_J,
+	    "polbuffalo6"_J,
+	    "driftkeitora"_J,
+	    "polbuffalo"_J,
 	});
 
 }
