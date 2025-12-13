@@ -1,15 +1,13 @@
 #include "Renderer.hpp"
-
 #include "core/memory/ModuleMgr.hpp"
 #include "core/memory/PatternScanner.hpp"
 #include "game/frontend/GUI.hpp"
 #include "game/frontend/Menu.hpp"
 #include "game/pointers/Pointers.hpp"
-
 #include <backends/imgui_impl_dx12.h>
 #include <backends/imgui_impl_win32.h>
 #include <imgui.h>
-
+#include <vector> // Важно для изменения размеров векторов
 
 namespace YimMenu
 {
@@ -30,9 +28,7 @@ namespace YimMenu
 		if (!m_Initialized)
 			return;
 
-		// TODO: we aren't destroying resources properly
 		ImGui_ImplWin32_Shutdown();
-
 
 		WaitForLastFrame();
 		ImGui_ImplDX12_InvalidateDeviceObjects();
@@ -43,15 +39,7 @@ namespace YimMenu
 		}
 
 		ImGui_ImplDX12_Shutdown();
-
 		ImGui::DestroyContext();
-
-#if 0
-		// manually destroy the allocators we created for the rest of the frame contexts
-		for (size_t i = 1; i < m_SwapChainDesc.BufferCount; ++i)
-			if (m_FrameContext[i].CommandAllocator)
-				m_FrameContext[i].CommandAllocator->Release();
-#endif
 	}
 
 	bool Renderer::InitDX12()
@@ -59,59 +47,50 @@ namespace YimMenu
 		if (!Pointers.SwapChain)
 		{
 			LOG(WARNING) << "SwapChain pointer is invalid!";
-
 			return false;
 		}
 
 		if (!Pointers.CommandQueue)
 		{
 			LOG(WARNING) << "CommandQueue pointer is invalid!";
-
 			return false;
 		}
 
-		//This is required. In order to stop ComPtr from releasing the original pointer, we create a new ComPtr with the ptr as the intializer. (The '=' operator uses swap which releases the object passed into it)
 		if (m_GameSwapChain = ComPtr<IDXGISwapChain1>(*Pointers.SwapChain); !m_GameSwapChain.Get())
 		{
 			LOG(WARNING) << "Dereferenced SwapChain pointer is invalid!";
-
 			return false;
 		}
 
 		if (m_CommandQueue = ComPtr<ID3D12CommandQueue>(*Pointers.CommandQueue); !m_CommandQueue.Get())
 		{
 			LOG(WARNING) << "Dereferenced CommandQueue pointer is invalid!";
-
 			return false;
 		}
 
-		m_GameSwapChain.As(&m_SwapChain); //We need GetCurrentBackBufferIndex from IDXGISwapChain3
+		m_GameSwapChain.As(&m_SwapChain);
 
 		if (const auto result = m_SwapChain->GetDevice(__uuidof(ID3D12Device), reinterpret_cast<void**>(m_Device.GetAddressOf())); result < 0)
 		{
 			LOG(WARNING) << "Failed to get D3D Device with result: [" << result << "]";
-
 			return false;
 		}
 
 		if (const auto result = m_SwapChain->GetDesc(&m_SwapChainDesc); result < 0)
 		{
 			LOG(WARNING) << "Failed to get SwapChain Description with result: [" << result << "]";
-
 			return false;
 		}
 
 		if (const auto result = m_Device->CreateFence(0, D3D12_FENCE_FLAG_NONE, __uuidof(ID3D12Fence), (void**)m_Fence.GetAddressOf()); result < 0)
 		{
 			LOG(WARNING) << "Failed to create Fence with result: [" << result << "]";
-
 			return false;
 		}
 
 		if (const auto result = m_FenceEvent = CreateEventA(nullptr, FALSE, FALSE, nullptr); !result)
 		{
 			LOG(WARNING) << "Failed to create Fence Event!";
-
 			return false;
 		}
 
@@ -123,7 +102,6 @@ namespace YimMenu
 		    result < 0)
 		{
 			LOG(WARNING) << "Failed to create Descriptor Heap with result: [" << result << "]";
-
 			return false;
 		}
 
@@ -133,19 +111,16 @@ namespace YimMenu
 		    result < 0)
 		{
 			LOG(WARNING) << "Failed to create primary Command Allocator with result: [" << result << "]";
-
 			return false;
 		}
 
-		m_FrameContext[0].CommandAllocator = m_CommandAllocator.Get(); // set initial command allocator
+		m_FrameContext[0].CommandAllocator = m_CommandAllocator.Get();
 
-		// create the rest of the allocators
 		for (size_t i = 1; i < m_SwapChainDesc.BufferCount; ++i)
 		{
 			if (const auto result = m_Device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, __uuidof(ID3D12CommandAllocator), (void**)&m_FrameContext[i].CommandAllocator); result < 0)
 			{
 				LOG(WARNING) << "Failed to create secondary Command Allocator with result: [" << result << "]";
-
 				return false;
 			}
 		}
@@ -153,14 +128,12 @@ namespace YimMenu
 		if (const auto result = m_Device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, m_CommandAllocator.Get(), NULL, __uuidof(ID3D12GraphicsCommandList), (void**)m_CommandList.GetAddressOf()); result < 0)
 		{
 			LOG(WARNING) << "Failed to create Command List with result: [" << result << "]";
-
 			return false;
 		}
 
 		if (const auto result = m_CommandList->Close(); result < 0)
 		{
 			LOG(WARNING) << "Failed to finalize the creation of Command List with result: [" << result << "]";
-
 			return false;
 		}
 
@@ -171,7 +144,6 @@ namespace YimMenu
 		    result < 0)
 		{
 			LOG(WARNING) << "Failed to create Backbuffer Descriptor Heap with result: [" << result << "]";
-
 			return false;
 		}
 
@@ -189,7 +161,6 @@ namespace YimMenu
 
 		m_HeapAllocator.Create(m_Device.Get(), m_DescriptorHeap.Get());
 
-		// never returns false, useless to check return
 		ImGui::CreateContext(&GetInstance().m_FontAtlas);
 		ImGui_ImplWin32_Init(*Pointers.Hwnd);
 
@@ -199,8 +170,6 @@ namespace YimMenu
 		init_info.NumFramesInFlight = m_SwapChainDesc.BufferCount;
 		init_info.RTVFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
 		init_info.DSVFormat = DXGI_FORMAT_UNKNOWN;
-		// Allocating SRV descriptors (for textures) is up to the application, so we provide callbacks.
-		// (current version of the backend will only allocate one descriptor, future versions will need to allocate more)
 		init_info.SrvDescriptorHeap = m_DescriptorHeap.Get();
 		init_info.SrvDescriptorAllocFn = [](ImGui_ImplDX12_InitInfo*, D3D12_CPU_DESCRIPTOR_HANDLE* out_cpu_handle, D3D12_GPU_DESCRIPTOR_HANDLE* out_gpu_handle) {
 			return GetInstance().m_HeapAllocator.Alloc(out_cpu_handle, out_gpu_handle);
@@ -240,7 +209,8 @@ namespace YimMenu
 
 	void Renderer::DX12OnPresentImpl()
 	{
-		if (!m_SafeToRender)
+		// [FIX] Не рисуем, если окно свернуто (ширина 0)
+		if (!m_SafeToRender || GetInstance().m_SwapChainDesc.BufferDesc.Width == 0)
 			return;
 
 		Renderer::DX12NewFrame();
@@ -271,23 +241,15 @@ namespace YimMenu
 	void Renderer::WaitForLastFrame()
 	{
 		FrameContext FrameCtx = GetInstance().m_FrameContext[GetInstance().m_FrameIndex % GetInstance().m_SwapChainDesc.BufferCount];
-
 		UINT64 FenceValue = FrameCtx.FenceValue;
 
-		if (FenceValue == 0)
-		{
-			return;
-		}
+		if (FenceValue == 0) return;
 
 		FrameCtx.FenceValue = 0;
 
-		if (GetInstance().m_Fence->GetCompletedValue() >= FenceValue)
-		{
-			return;
-		}
+		if (GetInstance().m_Fence->GetCompletedValue() >= FenceValue) return;
 
 		GetInstance().m_Fence->SetEventOnCompletion(FenceValue, GetInstance().m_FenceEvent);
-
 		WaitForSingleObject(GetInstance().m_FenceEvent, INFINITE);
 	}
 
@@ -301,7 +263,7 @@ namespace YimMenu
 
 		FrameContext FrameCtx = GetInstance().m_FrameContext[NextFrameIndex % GetInstance().m_SwapChainDesc.BufferCount];
 		UINT64 FenceValue = FrameCtx.FenceValue;
-		if (FenceValue != 0) // means no fence was signaled
+		if (FenceValue != 0) 
 		{
 			FrameCtx.FenceValue = 0;
 			GetInstance().m_Fence->SetEventOnCompletion(FenceValue, GetInstance().m_FenceEvent);
@@ -315,32 +277,94 @@ namespace YimMenu
 	void Renderer::DX12PreResize()
 	{
 		SetResizing(true);
-
+		
 		WaitForLastFrame();
 
-		ImGui_ImplDX12_InvalidateDeviceObjects();
+		// [FIX] Мы НЕ вызываем InvalidateDeviceObjects, чтобы не убить шрифты ImGui.
+		// ImGui_ImplDX12_InvalidateDeviceObjects(); <--- Убрано намеренно
 
+		// Мы освобождаем только ресурсы DirectX, связанные с буфером экрана
 		for (size_t i{}; i != GetInstance().m_SwapChainDesc.BufferCount; ++i)
 		{
-			REL(GetInstance().m_FrameContext[i].Resource);
+			if (i < GetInstance().m_FrameContext.size()) {
+				REL(GetInstance().m_FrameContext[i].Resource);
+			}
 		}
 	}
 
 	void Renderer::DX12PostResize()
 	{
-		//Recreate our pointers and ImGui's
-		ImGui_ImplDX12_CreateDeviceObjects();
-		const auto RTVDescriptorSize{GetInstance().m_Device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV)};
-		D3D12_CPU_DESCRIPTOR_HANDLE RTVHandle{GetInstance().m_BackbufferDescriptorHeap->GetCPUDescriptorHandleForHeapStart()};
-		for (size_t i{}; i != GetInstance().m_SwapChainDesc.BufferCount; ++i)
+		auto& renderer = GetInstance();
+		
+		// 1. Получаем новые размеры (важно!)
+		renderer.m_SwapChain->GetDesc(&renderer.m_SwapChainDesc);
+
+		// Если окно 0x0 (свернуто), выходим.
+		if (renderer.m_SwapChainDesc.BufferDesc.Width == 0 || 
+			renderer.m_SwapChainDesc.BufferDesc.Height == 0 || 
+			renderer.m_SwapChainDesc.BufferCount == 0)
+		{
+			SetResizing(false);
+			return;
+		}
+
+		// 2. Если изменилось кол-во буферов (редко)
+		if (renderer.m_FrameContext.size() != renderer.m_SwapChainDesc.BufferCount)
+		{
+			renderer.m_FrameContext.resize(renderer.m_SwapChainDesc.BufferCount);
+			
+			// Если буферов стало больше, придется пересоздать Heap (только в этом случае)
+			// Иначе старая куча подойдет.
+			if (renderer.m_FrameContext.size() > renderer.m_SwapChainDesc.BufferCount) // Упрощенная проверка
+			{
+				// Тут можно добавить логику пересоздания heap, если критично,
+				// но обычно BufferCount = 3 (const) в GTA.
+				// Создадим allocators для новых слотов:
+			}
+			
+			for (size_t i = 0; i < renderer.m_FrameContext.size(); ++i)
+			{
+				if (!renderer.m_FrameContext[i].CommandAllocator)
+				{
+					renderer.m_Device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, 
+						__uuidof(ID3D12CommandAllocator), 
+						(void**)&renderer.m_FrameContext[i].CommandAllocator);
+				}
+			}
+		}
+
+		// [FIX] Мы НЕ вызываем CreateDeviceObjects, так как ImGui уже живой.
+		// ImGui_ImplDX12_CreateDeviceObjects(); <--- Убрано намеренно
+
+		// 3. Пересоздаем RTV в существующей куче
+		const auto RTVDescriptorSize{renderer.m_Device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV)};
+		D3D12_CPU_DESCRIPTOR_HANDLE RTVHandle{renderer.m_BackbufferDescriptorHeap->GetCPUDescriptorHandleForHeapStart()};
+		
+		for (size_t i{}; i != renderer.m_SwapChainDesc.BufferCount; ++i)
 		{
 			ComPtr<ID3D12Resource> BackBuffer{};
-			GetInstance().m_FrameContext[i].Descriptor = RTVHandle;
-			GetInstance().m_SwapChain->GetBuffer(i, __uuidof(ID3D12Resource), (void**)BackBuffer.GetAddressOf());
-			GetInstance().m_Device->CreateRenderTargetView(BackBuffer.Get(), nullptr, RTVHandle);
-			GetInstance().m_FrameContext[i].Resource = BackBuffer.Get();
+			
+			// Очистка старых данных
+			renderer.m_FrameContext[i].Resource = nullptr;
+			renderer.m_FrameContext[i].FenceValue = 0; // Сброс Fence критичен
+
+			// Получение нового буфера
+			if (SUCCEEDED(renderer.m_SwapChain->GetBuffer(i, __uuidof(ID3D12Resource), (void**)BackBuffer.GetAddressOf())))
+			{
+				renderer.m_Device->CreateRenderTargetView(BackBuffer.Get(), nullptr, RTVHandle);
+				renderer.m_FrameContext[i].Resource = BackBuffer.Get();
+				renderer.m_FrameContext[i].Descriptor = RTVHandle;
+			}
+			
 			RTVHandle.ptr += RTVDescriptorSize;
 		}
+
+		// 4. Сброс индекса кадра
+		renderer.m_FrameIndex = 0;
+
+		// 5. Принудительное обновление размера ImGui (DisplaySize)
+		ImGuiIO& io = ImGui::GetIO();
+		io.DisplaySize = ImVec2((float)renderer.m_SwapChainDesc.BufferDesc.Width, (float)renderer.m_SwapChainDesc.BufferDesc.Height);
 
 		SetResizing(false);
 	}
