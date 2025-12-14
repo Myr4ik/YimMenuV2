@@ -7,7 +7,8 @@
 #include <backends/imgui_impl_dx12.h>
 #include <backends/imgui_impl_win32.h>
 #include <imgui.h>
-#include <vector> // Важно для изменения размеров векторов
+#include <vector>
+#include <ranges> // Для std::views::values
 
 namespace YimMenu
 {
@@ -15,12 +16,16 @@ namespace YimMenu
 	    m_Initialized(false),
 	    m_Resizing(false),
 	    m_FontsUpdated(false),
-		m_SafeToRender(false)
+		m_SafeToRender(false),
+		m_FrameIndex(0),
+		m_SwapchainWaitableObject(nullptr) // Инициализация нулем обязательна
 	{
 	}
 
 	Renderer::~Renderer()
 	{
+		// Гарантируем очистку ресурсов при уничтожении объекта
+		DestroyImpl();
 	}
 
 	void Renderer::DestroyImpl()
@@ -30,29 +35,43 @@ namespace YimMenu
 
 		ImGui_ImplWin32_Shutdown();
 
+		// Ждем завершения всех операций GPU перед удалением ресурсов
 		WaitForLastFrame();
+		
 		ImGui_ImplDX12_InvalidateDeviceObjects();
 
-		for (size_t i{}; i != GetInstance().m_SwapChainDesc.BufferCount; ++i)
+		for (size_t i{}; i < m_FrameContext.size(); ++i)
 		{
-			REL(GetInstance().m_FrameContext[i].Resource);
+			REL(m_FrameContext[i].Resource);
+
+			// ВАЖНО: m_FrameContext[0].CommandAllocator является сырым указателем на m_CommandAllocator (ComPtr).
+			// m_CommandAllocator освободится автоматически деструктором ComPtr.
+			// Аллокаторы с индексом > 0 создавались вручную, их нужно освободить явно.
+			if (i > 0)
+			{
+				REL(m_FrameContext[i].CommandAllocator);
+			}
+		}
+
+		m_FrameContext.clear();
+
+		if (m_FenceEvent)
+		{
+			CloseHandle(m_FenceEvent);
+			m_FenceEvent = nullptr;
 		}
 
 		ImGui_ImplDX12_Shutdown();
 		ImGui::DestroyContext();
+		
+		m_Initialized = false;
 	}
 
 	bool Renderer::InitDX12()
 	{
-		if (!Pointers.SwapChain)
+		if (!Pointers.SwapChain || !Pointers.CommandQueue)
 		{
-			LOG(WARNING) << "SwapChain pointer is invalid!";
-			return false;
-		}
-
-		if (!Pointers.CommandQueue)
-		{
-			LOG(WARNING) << "CommandQueue pointer is invalid!";
+			LOG(WARNING) << "SwapChain or CommandQueue pointers are invalid!";
 			return false;
 		}
 
@@ -70,25 +89,25 @@ namespace YimMenu
 
 		m_GameSwapChain.As(&m_SwapChain);
 
-		if (const auto result = m_SwapChain->GetDevice(__uuidof(ID3D12Device), reinterpret_cast<void**>(m_Device.GetAddressOf())); result < 0)
+		if (FAILED(m_SwapChain->GetDevice(__uuidof(ID3D12Device), reinterpret_cast<void**>(m_Device.GetAddressOf()))))
 		{
-			LOG(WARNING) << "Failed to get D3D Device with result: [" << result << "]";
+			LOG(WARNING) << "Failed to get D3D Device";
 			return false;
 		}
 
-		if (const auto result = m_SwapChain->GetDesc(&m_SwapChainDesc); result < 0)
+		if (FAILED(m_SwapChain->GetDesc(&m_SwapChainDesc)))
 		{
-			LOG(WARNING) << "Failed to get SwapChain Description with result: [" << result << "]";
+			LOG(WARNING) << "Failed to get SwapChain Description";
 			return false;
 		}
 
-		if (const auto result = m_Device->CreateFence(0, D3D12_FENCE_FLAG_NONE, __uuidof(ID3D12Fence), (void**)m_Fence.GetAddressOf()); result < 0)
+		if (FAILED(m_Device->CreateFence(0, D3D12_FENCE_FLAG_NONE, __uuidof(ID3D12Fence), (void**)m_Fence.GetAddressOf())))
 		{
-			LOG(WARNING) << "Failed to create Fence with result: [" << result << "]";
+			LOG(WARNING) << "Failed to create Fence";
 			return false;
 		}
 
-		if (const auto result = m_FenceEvent = CreateEventA(nullptr, FALSE, FALSE, nullptr); !result)
+		if (m_FenceEvent = CreateEventA(nullptr, FALSE, FALSE, nullptr); !m_FenceEvent)
 		{
 			LOG(WARNING) << "Failed to create Fence Event!";
 			return false;
@@ -97,58 +116,53 @@ namespace YimMenu
 		m_FrameContext.resize(m_SwapChainDesc.BufferCount);
 
 		D3D12_DESCRIPTOR_HEAP_DESC DescriptorDesc{D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, m_SwapChainDesc.BufferCount, D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE};
-		if (const auto result =
-		        m_Device->CreateDescriptorHeap(&DescriptorDesc, __uuidof(ID3D12DescriptorHeap), (void**)m_DescriptorHeap.GetAddressOf());
-		    result < 0)
+		if (FAILED(m_Device->CreateDescriptorHeap(&DescriptorDesc, __uuidof(ID3D12DescriptorHeap), (void**)m_DescriptorHeap.GetAddressOf())))
 		{
-			LOG(WARNING) << "Failed to create Descriptor Heap with result: [" << result << "]";
+			LOG(WARNING) << "Failed to create Descriptor Heap";
 			return false;
 		}
 
-		if (const auto result = m_Device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT,
-		        __uuidof(ID3D12CommandAllocator),
-		        (void**)m_CommandAllocator.GetAddressOf());
-		    result < 0)
+		// Создаем первичный аллокатор (управляется ComPtr)
+		if (FAILED(m_Device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, __uuidof(ID3D12CommandAllocator), (void**)m_CommandAllocator.GetAddressOf())))
 		{
-			LOG(WARNING) << "Failed to create primary Command Allocator with result: [" << result << "]";
+			LOG(WARNING) << "Failed to create primary Command Allocator";
 			return false;
 		}
 
 		m_FrameContext[0].CommandAllocator = m_CommandAllocator.Get();
 
+		// Создаем вторичные аллокаторы для остальных буферов
 		for (size_t i = 1; i < m_SwapChainDesc.BufferCount; ++i)
 		{
-			if (const auto result = m_Device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, __uuidof(ID3D12CommandAllocator), (void**)&m_FrameContext[i].CommandAllocator); result < 0)
+			if (FAILED(m_Device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, __uuidof(ID3D12CommandAllocator), (void**)&m_FrameContext[i].CommandAllocator)))
 			{
-				LOG(WARNING) << "Failed to create secondary Command Allocator with result: [" << result << "]";
+				LOG(WARNING) << "Failed to create secondary Command Allocator";
 				return false;
 			}
 		}
 
-		if (const auto result = m_Device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, m_CommandAllocator.Get(), NULL, __uuidof(ID3D12GraphicsCommandList), (void**)m_CommandList.GetAddressOf()); result < 0)
+		if (FAILED(m_Device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, m_CommandAllocator.Get(), NULL, __uuidof(ID3D12GraphicsCommandList), (void**)m_CommandList.GetAddressOf())))
 		{
-			LOG(WARNING) << "Failed to create Command List with result: [" << result << "]";
+			LOG(WARNING) << "Failed to create Command List";
 			return false;
 		}
 
-		if (const auto result = m_CommandList->Close(); result < 0)
+		if (FAILED(m_CommandList->Close()))
 		{
-			LOG(WARNING) << "Failed to finalize the creation of Command List with result: [" << result << "]";
+			LOG(WARNING) << "Failed to finalize Command List";
 			return false;
 		}
 
 		D3D12_DESCRIPTOR_HEAP_DESC DescriptorBackbufferDesc{D3D12_DESCRIPTOR_HEAP_TYPE_RTV, m_SwapChainDesc.BufferCount, D3D12_DESCRIPTOR_HEAP_FLAG_NONE, 1};
-		if (const auto result = m_Device->CreateDescriptorHeap(&DescriptorBackbufferDesc,
-		        __uuidof(ID3D12DescriptorHeap),
-		        (void**)m_BackbufferDescriptorHeap.GetAddressOf());
-		    result < 0)
+		if (FAILED(m_Device->CreateDescriptorHeap(&DescriptorBackbufferDesc, __uuidof(ID3D12DescriptorHeap), (void**)m_BackbufferDescriptorHeap.GetAddressOf())))
 		{
-			LOG(WARNING) << "Failed to create Backbuffer Descriptor Heap with result: [" << result << "]";
+			LOG(WARNING) << "Failed to create Backbuffer Descriptor Heap";
 			return false;
 		}
 
 		const auto RTVDescriptorSize{m_Device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV)};
 		D3D12_CPU_DESCRIPTOR_HANDLE RTVHandle{m_BackbufferDescriptorHeap->GetCPUDescriptorHandleForHeapStart()};
+		
 		for (size_t i = 0; i < m_SwapChainDesc.BufferCount; ++i)
 		{
 			ComPtr<ID3D12Resource> BackBuffer{};
@@ -158,6 +172,10 @@ namespace YimMenu
 			m_FrameContext[i].Resource = BackBuffer.Get();
 			RTVHandle.ptr += RTVDescriptorSize;
 		}
+
+		// Если SwapChain был создан с флагом DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT, 
+		// здесь можно получить хендл. В большинстве случаев хуков это null.
+		// m_SwapchainWaitableObject = m_SwapChain->GetFrameLatencyWaitableObject();
 
 		m_HeapAllocator.Create(m_Device.Get(), m_DescriptorHeap.Get());
 
@@ -209,7 +227,7 @@ namespace YimMenu
 
 	void Renderer::DX12OnPresentImpl()
 	{
-		// [FIX] Не рисуем, если окно свернуто (ширина 0)
+		// Если окно свернуто (размер 0), не рисуем, чтобы избежать ошибок и зависаний.
 		if (!m_SafeToRender || GetInstance().m_SwapChainDesc.BufferDesc.Width == 0)
 			return;
 
@@ -240,7 +258,8 @@ namespace YimMenu
 
 	void Renderer::WaitForLastFrame()
 	{
-		FrameContext FrameCtx = GetInstance().m_FrameContext[GetInstance().m_FrameIndex % GetInstance().m_SwapChainDesc.BufferCount];
+		// Используем ссылку FrameContext&, чтобы изменять fence value в реальном объекте, а не в копии
+		FrameContext& FrameCtx = GetInstance().m_FrameContext[GetInstance().m_FrameIndex % GetInstance().m_SwapChainDesc.BufferCount];
 		UINT64 FenceValue = FrameCtx.FenceValue;
 
 		if (FenceValue == 0) return;
@@ -255,23 +274,34 @@ namespace YimMenu
 
 	void Renderer::WaitForNextFrame()
 	{
-		UINT NextFrameIndex = GetInstance().m_FrameIndex + 1;
-		GetInstance().m_FrameIndex = NextFrameIndex;
+		auto& inst = GetInstance();
+		UINT NextFrameIndex = inst.m_FrameIndex + 1;
+		inst.m_FrameIndex = NextFrameIndex;
 
-		HANDLE WaitableObjects[] = {GetInstance().m_SwapchainWaitableObject, nullptr};
-		DWORD NumWaitableObjets = 1;
+		HANDLE WaitableObjects[2] = { nullptr, nullptr };
+		DWORD NumWaitableObjects = 0;
 
-		FrameContext FrameCtx = GetInstance().m_FrameContext[NextFrameIndex % GetInstance().m_SwapChainDesc.BufferCount];
+		// Добавляем Swapchain Waitable Object только если он валиден
+		if (inst.m_SwapchainWaitableObject)
+		{
+			WaitableObjects[NumWaitableObjects++] = inst.m_SwapchainWaitableObject;
+		}
+
+		// Используем ссылку FrameContext&
+		FrameContext& FrameCtx = inst.m_FrameContext[NextFrameIndex % inst.m_SwapChainDesc.BufferCount];
 		UINT64 FenceValue = FrameCtx.FenceValue;
+		
 		if (FenceValue != 0) 
 		{
 			FrameCtx.FenceValue = 0;
-			GetInstance().m_Fence->SetEventOnCompletion(FenceValue, GetInstance().m_FenceEvent);
-			WaitableObjects[1] = GetInstance().m_FenceEvent;
-			NumWaitableObjets = 2;
+			inst.m_Fence->SetEventOnCompletion(FenceValue, inst.m_FenceEvent);
+			WaitableObjects[NumWaitableObjects++] = inst.m_FenceEvent;
 		}
 
-		WaitForMultipleObjects(NumWaitableObjets, WaitableObjects, TRUE, INFINITE);
+		if (NumWaitableObjects > 0)
+		{
+			WaitForMultipleObjects(NumWaitableObjects, WaitableObjects, TRUE, INFINITE);
+		}
 	}
 
 	void Renderer::DX12PreResize()
@@ -280,10 +310,7 @@ namespace YimMenu
 		
 		WaitForLastFrame();
 
-		// [FIX] Мы НЕ вызываем InvalidateDeviceObjects, чтобы не убить шрифты ImGui.
-		// ImGui_ImplDX12_InvalidateDeviceObjects(); <--- Убрано намеренно
-
-		// Мы освобождаем только ресурсы DirectX, связанные с буфером экрана
+		// Освобождаем только ресурсы (Buffers), аллокаторы команд оставляем
 		for (size_t i{}; i != GetInstance().m_SwapChainDesc.BufferCount; ++i)
 		{
 			if (i < GetInstance().m_FrameContext.size()) {
@@ -296,10 +323,9 @@ namespace YimMenu
 	{
 		auto& renderer = GetInstance();
 		
-		// 1. Получаем новые размеры (важно!)
 		renderer.m_SwapChain->GetDesc(&renderer.m_SwapChainDesc);
 
-		// Если окно 0x0 (свернуто), выходим.
+		// Проверка на свернутое окно (0x0)
 		if (renderer.m_SwapChainDesc.BufferDesc.Width == 0 || 
 			renderer.m_SwapChainDesc.BufferDesc.Height == 0 || 
 			renderer.m_SwapChainDesc.BufferCount == 0)
@@ -308,20 +334,12 @@ namespace YimMenu
 			return;
 		}
 
-		// 2. Если изменилось кол-во буферов (редко)
+		// Если изменилось количество буферов
 		if (renderer.m_FrameContext.size() != renderer.m_SwapChainDesc.BufferCount)
 		{
 			renderer.m_FrameContext.resize(renderer.m_SwapChainDesc.BufferCount);
 			
-			// Если буферов стало больше, придется пересоздать Heap (только в этом случае)
-			// Иначе старая куча подойдет.
-			if (renderer.m_FrameContext.size() > renderer.m_SwapChainDesc.BufferCount) // Упрощенная проверка
-			{
-				// Тут можно добавить логику пересоздания heap, если критично,
-				// но обычно BufferCount = 3 (const) в GTA.
-				// Создадим allocators для новых слотов:
-			}
-			
+			// Создаем недостающие аллокаторы
 			for (size_t i = 0; i < renderer.m_FrameContext.size(); ++i)
 			{
 				if (!renderer.m_FrameContext[i].CommandAllocator)
@@ -333,10 +351,16 @@ namespace YimMenu
 			}
 		}
 
-		// [FIX] Мы НЕ вызываем CreateDeviceObjects, так как ImGui уже живой.
-		// ImGui_ImplDX12_CreateDeviceObjects(); <--- Убрано намеренно
+		// Проверка: поместятся ли новые буферы в текущую кучу RTV дескрипторов
+		D3D12_DESCRIPTOR_HEAP_DESC rtvDesc = renderer.m_BackbufferDescriptorHeap->GetDesc();
+		if (renderer.m_SwapChainDesc.BufferCount > rtvDesc.NumDescriptors)
+		{
+			// Если нет, пересоздаем кучу
+			renderer.m_BackbufferDescriptorHeap.Reset();
+			D3D12_DESCRIPTOR_HEAP_DESC DescriptorBackbufferDesc{D3D12_DESCRIPTOR_HEAP_TYPE_RTV, renderer.m_SwapChainDesc.BufferCount, D3D12_DESCRIPTOR_HEAP_FLAG_NONE, 1};
+			renderer.m_Device->CreateDescriptorHeap(&DescriptorBackbufferDesc, __uuidof(ID3D12DescriptorHeap), (void**)renderer.m_BackbufferDescriptorHeap.GetAddressOf());
+		}
 
-		// 3. Пересоздаем RTV в существующей куче
 		const auto RTVDescriptorSize{renderer.m_Device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV)};
 		D3D12_CPU_DESCRIPTOR_HANDLE RTVHandle{renderer.m_BackbufferDescriptorHeap->GetCPUDescriptorHandleForHeapStart()};
 		
@@ -344,11 +368,9 @@ namespace YimMenu
 		{
 			ComPtr<ID3D12Resource> BackBuffer{};
 			
-			// Очистка старых данных
 			renderer.m_FrameContext[i].Resource = nullptr;
-			renderer.m_FrameContext[i].FenceValue = 0; // Сброс Fence критичен
+			renderer.m_FrameContext[i].FenceValue = 0; 
 
-			// Получение нового буфера
 			if (SUCCEEDED(renderer.m_SwapChain->GetBuffer(i, __uuidof(ID3D12Resource), (void**)BackBuffer.GetAddressOf())))
 			{
 				renderer.m_Device->CreateRenderTargetView(BackBuffer.Get(), nullptr, RTVHandle);
@@ -359,12 +381,8 @@ namespace YimMenu
 			RTVHandle.ptr += RTVDescriptorSize;
 		}
 
-		// 4. Сброс индекса кадра
 		renderer.m_FrameIndex = 0;
-
-		// 5. Принудительное обновление размера ImGui (DisplaySize)
-		ImGuiIO& io = ImGui::GetIO();
-		io.DisplaySize = ImVec2((float)renderer.m_SwapChainDesc.BufferDesc.Width, (float)renderer.m_SwapChainDesc.BufferDesc.Height);
+		// ImGui_ImplWin32_NewFrame автоматически обновит DisplaySize, вручную это делать не нужно.
 
 		SetResizing(false);
 	}
@@ -393,6 +411,7 @@ namespace YimMenu
 		D3D12_RESOURCE_BARRIER Barrier{D3D12_RESOURCE_BARRIER_TYPE_TRANSITION,
 		    D3D12_RESOURCE_BARRIER_FLAG_NONE,
 		    {{CurrentFrameContext.Resource, D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES, D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET}}};
+		
 		GetInstance().m_CommandList->Reset(CurrentFrameContext.CommandAllocator, nullptr);
 		GetInstance().m_CommandList->ResourceBarrier(1, &Barrier);
 		GetInstance().m_CommandList->OMSetRenderTargets(1, &CurrentFrameContext.Descriptor, FALSE, nullptr);
