@@ -5,6 +5,7 @@
 #include "game/gta/ScriptGlobal.hpp"
 #include "game/gta/ScriptLocal.hpp"
 #include "core/backend/ScriptMgr.hpp"
+#include "types/script/globals/GPBD_FM_2.hpp"
 
 namespace YimMenu::Features
 {
@@ -36,11 +37,12 @@ namespace YimMenu::Features
 
 			virtual void OnCall() override
 			{
-				auto base = ScriptGlobal(1882717);
-
-				for (int i = 0; i <= 3; i++)
+				if (auto gpbd_fm_2 = GPBD_FM_2::Get())
 				{
-					*base.At(i, 201).At(43).At(11).At(i, 1).As<int*>() = 1;
+					gpbd_fm_2->Entries[0].GangopsData.ArePlayersReady[0] = TRUE;
+					gpbd_fm_2->Entries[1].GangopsData.ArePlayersReady[1] = TRUE;
+					gpbd_fm_2->Entries[2].GangopsData.ArePlayersReady[2] = TRUE;
+					gpbd_fm_2->Entries[3].GangopsData.ArePlayersReady[3] = TRUE;
 				}
 			}
 		};

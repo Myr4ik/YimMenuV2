@@ -123,7 +123,7 @@ namespace YimMenu::Features
 				ScriptMgr::Yield(500ms);
 
 				if (auto thread = Scripts::FindScriptThread("heist_island_planning"_J))
-					*ScriptLocal(thread, 157).As<int*>() = 2;
+					*ScriptLocal(thread, 1570).As<int*>() = 2;
 			}
 		};
 
